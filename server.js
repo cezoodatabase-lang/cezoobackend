@@ -1,9 +1,6 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -13,7 +10,7 @@ const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
     throw new Error(
-        "Missing SUPABASE_URL or SUPABASE_SECRET_KEY in Render environment variables."
+        "SUPABASE_URL or SUPABASE_SECRET_KEY is missing"
     );
 }
 
@@ -28,13 +25,14 @@ const supabase = createClient(
     }
 );
 
-app.use(cors());
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 
-/*
-Only these tables can be requested from the frontend.
-Add more table names here when needed.
-*/
 const ALLOWED_TABLES = new Set([
     "cezoogroceris",
     "fresh_products",
@@ -46,10 +44,6 @@ const ALLOWED_TABLES = new Set([
     "cash_delivery_orders"
 ]);
 
-/*
-Health check:
-https://YOUR-RENDER-URL.onrender.com/
-*/
 app.get("/", (req, res) => {
     res.json({
         success: true,
@@ -57,13 +51,6 @@ app.get("/", (req, res) => {
     });
 });
 
-/*
-Load all rows from one approved table.
-
-Example:
-https://YOUR-RENDER-URL.onrender.com/api/table/fresh_products
-https://YOUR-RENDER-URL.onrender.com/api/table/icecreams
-*/
 app.get("/api/table/:tableName", async (req, res) => {
     try {
         const tableName = req.params.tableName;
@@ -80,7 +67,7 @@ app.get("/api/table/:tableName", async (req, res) => {
             .select("*");
 
         if (error) {
-            console.error(error);
+            console.error("Supabase error:", error);
 
             return res.status(500).json({
                 success: false,
@@ -88,38 +75,27 @@ app.get("/api/table/:tableName", async (req, res) => {
             });
         }
 
-        res.json({
+        return res.json({
             success: true,
             table: tableName,
-            count: data.length,
-            data
+            count: data?.length || 0,
+            data: data || []
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Server error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            message: "Server error"
+            message: error.message
         });
     }
 });
 
-/*
-Load selected IDs from one approved table.
-
-Example:
-POST /api/table/fresh_products/ids
-
-Body:
-{
-    "ids": [2, 3, 4, 5]
-}
-*/
 app.post("/api/table/:tableName/ids", async (req, res) => {
     try {
         const tableName = req.params.tableName;
-        const ids = req.body.ids;
+        const ids = req.body?.ids;
 
         if (!ALLOWED_TABLES.has(tableName)) {
             return res.status(400).json({
@@ -149,7 +125,7 @@ app.post("/api/table/:tableName/ids", async (req, res) => {
             .in("id", cleanIds);
 
         if (error) {
-            console.error(error);
+            console.error("Supabase error:", error);
 
             return res.status(500).json({
                 success: false,
@@ -157,29 +133,29 @@ app.post("/api/table/:tableName/ids", async (req, res) => {
             });
         }
 
-        const rowMap = new Map(
-            data.map(row => [Number(row.id), row])
-        );
-
-        const orderedData = cleanIds
-            .map(id => rowMap.get(id))
-            .filter(Boolean);
-
-        res.json({
+        return res.json({
             success: true,
             table: tableName,
-            count: orderedData.length,
-            data: orderedData
+            count: data?.length || 0,
+            data: data || []
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Server error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            message: "Server error"
+            message: error.message
         });
     }
+});
+
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: "Route not found",
+        path: req.path
+    });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
