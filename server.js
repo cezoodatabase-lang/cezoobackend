@@ -34,7 +34,7 @@ app.use(cors({
 app.use(express.json());
 
 const ALLOWED_TABLES = new Set([
-    "cezoogroceris",
+    "cezoogroceries",
     "fresh_products",
     "icecreams",
     "delivery_cash_orders",
