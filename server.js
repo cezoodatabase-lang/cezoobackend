@@ -62,29 +62,52 @@ app.get("/api/table/:tableName", async (req, res) => {
             });
         }
 
-        const { data, error } = await supabase
+        const page = Math.max(
+            parseInt(req.query.page) || 1,
+            1
+        );
+
+        const limit = Math.min(
+            Math.max(
+                parseInt(req.query.limit) || 12,
+                1
+            ),
+            50
+        );
+
+        const from = (page - 1) * limit;
+        const to = from + limit - 1;
+
+        const { data, error, count } = await supabase
             .from(tableName)
-            .select("*");
+            .select("*", {
+                count: "exact"
+            })
+            .order("id", {
+                ascending: true
+            })
+            .range(from, to);
 
         if (error) {
-            console.error("Supabase error:", error);
-
             return res.status(500).json({
                 success: false,
                 message: error.message
             });
         }
 
+        const total = count || 0;
+
         return res.json({
             success: true,
             table: tableName,
-            count: data?.length || 0,
+            page,
+            limit,
+            total,
+            hasMore: to + 1 < total,
             data: data || []
         });
 
     } catch (error) {
-        console.error("Server error:", error);
-
         return res.status(500).json({
             success: false,
             message: error.message
