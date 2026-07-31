@@ -29,7 +29,7 @@ const supabase = createClient(
 app.use(
     cors({
         origin: "*",
-        methods: ["GET", "POST", "OPTIONS"],
+        methods: ["GET", "POST", "PATCH", "OPTIONS"],
         allowedHeaders: ["Content-Type"]
     })
 );
@@ -229,6 +229,142 @@ app.post(
                 message:
                     error.message ||
                     "Unable to load cart products"
+            });
+        }
+    }
+);
+
+
+/*
+ * UPDATE ONE RECORD
+ * PATCH /api/table/:tableName/:id
+ *
+ * Example:
+ * PATCH /api/table/fresh_products/12
+ * Body: { "name": "Apple", "discount_price": 99 }
+ */
+app.patch(
+    "/api/table/:tableName/:id",
+    async (req, res) => {
+        try {
+            const tableName =
+                req.params.tableName;
+
+            const recordId =
+                Number.parseInt(
+                    req.params.id,
+                    10
+                );
+
+            if (!ALLOWED_TABLES.has(tableName)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Table is not allowed"
+                });
+            }
+
+            if (
+                !Number.isInteger(recordId) ||
+                recordId <= 0
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid record ID is required"
+                });
+            }
+
+            const updates =
+                req.body;
+
+            if (
+                !updates ||
+                typeof updates !== "object" ||
+                Array.isArray(updates) ||
+                Object.keys(updates).length === 0
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Update data is required"
+                });
+            }
+
+            /*
+             * Never allow the frontend to modify protected columns.
+             * Add more protected column names here when needed.
+             */
+            const PROTECTED_FIELDS = new Set([
+                "id",
+                "created_at"
+            ]);
+
+            const cleanUpdates =
+                Object.fromEntries(
+                    Object.entries(updates)
+                        .filter(
+                            ([field, value]) =>
+                                !PROTECTED_FIELDS.has(field) &&
+                                value !== undefined
+                        )
+                );
+
+            if (
+                Object.keys(cleanUpdates).length === 0
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "No valid fields were supplied for update"
+                });
+            }
+
+            const {
+                data,
+                error
+            } = await supabase
+                .from(tableName)
+                .update(cleanUpdates)
+                .eq("id", recordId)
+                .select("*")
+                .maybeSingle();
+
+            if (error) {
+                console.error(
+                    "Supabase update error:",
+                    error
+                );
+
+                return res.status(500).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
+            if (!data) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Record not found"
+                });
+            }
+
+            return res.json({
+                success: true,
+                message:
+                    "Record updated successfully",
+                table: tableName,
+                data
+            });
+
+        } catch (error) {
+            console.error(
+                "Update record error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to update record"
             });
         }
     }
