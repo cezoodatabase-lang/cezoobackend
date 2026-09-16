@@ -650,6 +650,326 @@ app.post(
     }
 );
 
+
+// ============================================================
+// GET CUSTOMER ORDERS
+// Browser calls Render only.
+// Supabase secret key stays on Render.
+// Returns real order items + product names + images.
+// ============================================================
+
+app.get(
+    "/api/orders",
+    async (req, res) => {
+        try {
+            const mobile = String(
+                req.query.mobile ||
+                req.query.user_mobile ||
+                ""
+            ).replace(/\D/g, "").slice(-10);
+
+            if (!mobile) {
+                return res.status(400).json({
+                    success: false,
+                    message: "mobile is required"
+                });
+            }
+
+            const variants = [
+                mobile,
+                "91" + mobile,
+                "+91" + mobile,
+                "+91 " + mobile
+            ];
+
+            // Load both customer order tables.
+            const [cashResult, upiResult] = await Promise.all([
+                supabase
+                    .from("cash_delivery_orders")
+                    .select("*")
+                    .in("user_mobile", variants),
+
+                supabase
+                    .from("upi_orders")
+                    .select("*")
+                    .in("user_mobile", variants)
+            ]);
+
+            if (cashResult.error) {
+                throw cashResult.error;
+            }
+
+            if (upiResult.error) {
+                throw upiResult.error;
+            }
+
+            const rawOrders = [
+                ...(cashResult.data || []).map(order => ({
+                    ...order,
+                    _order_type: "cash"
+                })),
+                ...(upiResult.data || []).map(order => ({
+                    ...order,
+                    _order_type: "upi"
+                }))
+            ];
+
+            rawOrders.sort((a, b) => {
+                return (
+                    new Date(b.created_at || 0).getTime() -
+                    new Date(a.created_at || 0).getTime()
+                );
+            });
+
+            // ------------------------------------------------
+            // Product lookup cache
+            // ------------------------------------------------
+
+            const productCache = new Map();
+
+            function parseItems(order) {
+                const candidates = [
+                    order.items,
+                    order.order_items,
+                    order.orderItems,
+                    order.products,
+                    order.cart_items,
+                    order.cartItems,
+                    order.items_json
+                ];
+
+                for (const value of candidates) {
+                    if (Array.isArray(value)) {
+                        return value;
+                    }
+
+                    if (typeof value === "string") {
+                        try {
+                            const parsed = JSON.parse(value);
+                            if (Array.isArray(parsed)) {
+                                return parsed;
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                return [];
+            }
+
+            function getTable(item) {
+                return String(
+                    item.product_table ??
+                    item.table_name ??
+                    item.table ??
+                    ""
+                ).trim();
+            }
+
+            function getProductId(item) {
+                const id = Number(
+                    item.product_id ??
+                    item.productId ??
+                    item.id
+                );
+
+                return Number.isInteger(id) && id > 0
+                    ? id
+                    : null;
+            }
+
+            function getQty(item) {
+                return Number(
+                    item.qty ??
+                    item.quantity ??
+                    item.ordered_qty ??
+                    item.count ??
+                    1
+                ) || 1;
+            }
+
+            // ------------------------------------------------
+            // Collect product IDs by table
+            // ------------------------------------------------
+
+            const grouped = new Map();
+
+            for (const order of rawOrders) {
+                for (const item of parseItems(order)) {
+                    const table = getTable(item);
+                    const id = getProductId(item);
+
+                    if (!table || !id) {
+                        continue;
+                    }
+
+                    if (!grouped.has(table)) {
+                        grouped.set(table, new Set());
+                    }
+
+                    grouped.get(table).add(id);
+                }
+            }
+
+            // ------------------------------------------------
+            // Fetch actual product records.
+            // This gives name + image1 + price etc.
+            // ------------------------------------------------
+
+            for (const [table, idSet] of grouped.entries()) {
+
+                const ids = [...idSet].filter(
+                    id => !productCache.has(`${table}_${id}`)
+                );
+
+                if (!ids.length) {
+                    continue;
+                }
+
+                const { data, error } = await supabase
+                    .from(table)
+                    .select("*")
+                    .in("id", ids);
+
+                if (error) {
+                    console.error(
+                        `Order product lookup failed (${table}):`,
+                        error
+                    );
+                    continue;
+                }
+
+                for (const product of (data || [])) {
+                    productCache.set(
+                        `${table}_${product.id}`,
+                        {
+                            ...product,
+                            product_table: table
+                        }
+                    );
+                }
+            }
+
+            // ------------------------------------------------
+            // Merge product details into every order item
+            // ------------------------------------------------
+
+            const orders = rawOrders.map(order => {
+
+                const items = parseItems(order).map(item => {
+
+                    const table = getTable(item);
+                    const id = getProductId(item);
+                    const qty = getQty(item);
+
+                    const product =
+                        table && id
+                            ? productCache.get(
+                                `${table}_${id}`
+                            )
+                            : null;
+
+                    return {
+                        ...item,
+
+                        product_id:
+                            id ??
+                            item.product_id ??
+                            null,
+
+                        product_table:
+                            table ||
+                            item.product_table ||
+                            null,
+
+                        qty,
+
+                        ordered_qty: qty,
+
+                        // Real product details from database.
+                        name:
+                            product?.name ??
+                            product?.product_name ??
+                            item.name ??
+                            item.product_name ??
+                            item.productName ??
+                            item.title ??
+                            "Product",
+
+                        name_telugu:
+                            product?.name_telugu ??
+                            product?.product_name_telugu ??
+                            item.name_telugu ??
+                            item.product_name_telugu ??
+                            "",
+
+                        image1:
+                            product?.image1 ??
+                            item.image1 ??
+                            item.image ??
+                            item.image_url ??
+                            item.product_image ??
+                            "",
+
+                        image2:
+                            product?.image2 ??
+                            item.image2 ??
+                            "",
+
+                        image3:
+                            product?.image3 ??
+                            item.image3 ??
+                            "",
+
+                        unit:
+                            product?.unit ??
+                            item.unit ??
+                            "",
+
+                        original_price:
+                            product?.original_price ??
+                            item.original_price ??
+                            item.price ??
+                            0,
+
+                        discount_price:
+                            product?.discount_price ??
+                            item.discount_price ??
+                            item.price ??
+                            0
+                    };
+                });
+
+                return {
+                    ...order,
+                    items,
+                    _items_loaded_from_products: true
+                };
+            });
+
+            return res.json({
+                success: true,
+                count: orders.length,
+                orders
+            });
+
+        } catch (error) {
+
+            console.error(
+                "GET /api/orders error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to load customer orders"
+            });
+        }
+    }
+);
+
+
 app.use((req, res) => {
     return res.status(404).json({
         success: false,
@@ -674,6 +994,10 @@ app.listen(
 
         console.log(
             "Orders endpoint: POST /api/orders"
+        );
+
+        console.log(
+            "Customer orders endpoint: GET /api/orders?mobile=XXXXXXXXXX"
         );
     }
 );
