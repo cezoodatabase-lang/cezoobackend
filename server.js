@@ -970,6 +970,50 @@ app.get(
 );
 
 
+// CEZOO rider registration — POST /api/webpatner
+// Only name, phone and city are accepted from the public form.
+app.post("/api/webpatner", async (req, res) => {
+    try {
+        const name = typeof req.body?.name === "string"
+            ? req.body.name.trim() : "";
+        const phone = typeof req.body?.phone === "string"
+            ? req.body.phone.trim() : "";
+        const city = typeof req.body?.city === "string"
+            ? req.body.city.trim() : "";
+
+        if (name.length < 2 || name.length > 100 ||
+            !/^[6-9][0-9]{9}$/.test(phone) || city !== "Tanuku") {
+            return res.status(400).json({
+                success: false,
+                message: "Enter a valid name, 10-digit phone number and Tanuku city"
+            });
+        }
+
+        const { error } = await supabase
+            .from("webpatner")
+            .insert({ name, phone, city });
+
+        if (error) {
+            console.error("Rider registration insert error:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Unable to save application"
+            });
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: "Application submitted successfully"
+        });
+    } catch (error) {
+        console.error("Rider registration error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to submit application"
+        });
+    }
+});
+
 app.use((req, res) => {
     return res.status(404).json({
         success: false,
